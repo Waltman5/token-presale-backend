@@ -39,7 +39,8 @@ const purchaseSchema = new mongoose.Schema({
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 
 //    B) User
-const User = require("./models/User");
+const User = require('./models/user'); // Correct (matches `user.js`)
+
 
 // 4) GET /raised-amount
 app.get("/raised-amount", async (req, res) => {

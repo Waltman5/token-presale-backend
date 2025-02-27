@@ -7,6 +7,11 @@ const bodyParser = require("body-parser");
 // For on-chain validation
 const { Connection, PublicKey } = require("@solana/web3.js");
 
+// For Cloudinary integration
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+
 // 1) Create a connection to Solana
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const solanaConnection = new Connection(SOLANA_RPC_URL, "confirmed");
@@ -17,6 +22,9 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json());
 app.use(bodyParser.json());
 app.use(cors());
+
+// Serve the images folder (so /images/avatarmain.png is accessible)
+app.use("/images", express.static("images"));
 
 // 2) Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI, {
@@ -39,8 +47,37 @@ const purchaseSchema = new mongoose.Schema({
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 
 //    B) User
-const User = require('./models/user'); // Correct (matches `user.js`)
+const User = require('./models/user'); // Must match your user.js model
 
+// ------------------------------------------------------
+// Cloudinary Configuration & Multer Storage for Avatars
+// ------------------------------------------------------
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME, // from your .env
+  api_key: process.env.CLOUDINARY_API_KEY,       // from your .env
+  api_secret: process.env.CLOUDINARY_API_SECRET  // from your .env
+});
+
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "avatars", // Folder in Cloudinary
+    allowed_formats: ["jpg", "png", "jpeg", "gif"],
+  },
+});
+
+// 500 KB limit; only image files allowed
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 500 * 1024 }, // 500 KB
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) {
+      cb(new Error("Only image files are allowed!"), false);
+    } else {
+      cb(null, true);
+    }
+  }
+});
 
 // 4) GET /raised-amount
 app.get("/raised-amount", async (req, res) => {
@@ -57,7 +94,7 @@ app.get("/raised-amount", async (req, res) => {
 });
 
 // 5) GET /user/:walletAddress
-//    - Return the user's referral info (code, earnings).
+//    - Return the user's referral info (code, earnings, avatar).
 //    - If user doesn't exist, auto-create them with a random code.
 app.get("/user/:walletAddress", async (req, res) => {
   try {
@@ -74,10 +111,14 @@ app.get("/user/:walletAddress", async (req, res) => {
       await user.save();
     }
 
+    // Provide a fallback avatar if user.avatarUrl not set
+    const defaultAvatar = "/images/avatarmain.png";
+
     return res.json({
       walletAddress: user.walletAddress,
       referralCode: user.referralCode || null,
-      referralEarnings: user.referralEarnings || 0
+      referralEarnings: user.referralEarnings || 0,
+      avatarUrl: user.avatarUrl || defaultAvatar
     });
   } catch (err) {
     console.error("Error in GET /user:", err);
@@ -167,7 +208,41 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// 9) Webhook from Helius (optional)
+// 9) POST /upload-avatar using Cloudinary
+//    - Restrict file size to 500 KB
+app.post("/upload-avatar", (req, res) => {
+  upload.single("avatar")(req, res, async function(err) {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "File size too large. Please resize your image to under 500KB." });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    try {
+      const { walletAddress } = req.body;
+      if (!req.file || !walletAddress) {
+        return res.status(400).json({ error: "Missing wallet address or image." });
+      }
+      // Cloudinary returns the URL in req.file.path
+      const finalUrl = req.file.path;
+
+      // Update user doc
+      const user = await User.findOne({ walletAddress });
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Overwrite or set the new avatar
+      user.avatarUrl = finalUrl;
+      await user.save();
+
+      res.json({ message: "Avatar uploaded successfully", avatarUrl: finalUrl });
+    } catch (err) {
+      console.error("Avatar upload error:", err);
+      res.status(500).json({ error: "Avatar upload failed" });
+    }
+  });
+});
+
+// 10) Webhook from Helius (optional)
 app.post("/webhook/solana-inbound", async (req, res) => {
   console.log("🔔 Webhook received from Helius!");
   try {
@@ -210,12 +285,12 @@ app.post("/webhook/solana-inbound", async (req, res) => {
   }
 });
 
-// 10) Start the server
+// 11) Start the server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// 11) Validate signature on Solana
+// 12) Validate signature on Solana
 async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpent) {
   try {
     const txInfo = await solanaConnection.getTransaction(txSignature, {

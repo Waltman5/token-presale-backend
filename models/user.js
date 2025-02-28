@@ -1,5 +1,4 @@
 // models/User.js
-
 const mongoose = require("mongoose");
 
 /**
@@ -7,6 +6,8 @@ const mongoose = require("mongoose");
  * - 'walletAddress': The user’s Solana address
  * - 'referralCode': The code they share with others, e.g. "ABC123"
  * - 'referralEarnings': The total USD they've earned from referrals
+ * - 'displayName': The user's chosen name
+ * - 'avatarUrl': The user's chosen avatar
  */
 const userSchema = new mongoose.Schema({
   walletAddress: {
@@ -23,8 +24,16 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-   displayName: { type: String, required: false, default: "" },
-  avatarUrl: { type: String, required: false, default: "" }
+  displayName: { 
+    type: String, 
+    required: false, 
+    default: "" 
+  },
+  avatarUrl: { 
+    type: String, 
+    required: false, 
+    default: "" 
+  }
 });
 
 module.exports = mongoose.model("User", userSchema);

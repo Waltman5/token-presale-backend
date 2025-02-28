@@ -25,11 +25,10 @@ app.use(cors());
 
 // 1) Serve images and static files
 app.use("/images", express.static("images")); 
-// Place your avatarmain.png in /images folder at the same level as server.js
+// Place avatarmain.png inside a local 'images' folder
 
 app.use(express.static("public"));
-// We'll put leaderboard.html in a `public/` folder so you can visit
-// http://localhost:5000/leaderboard.html
+// We'll put .html files in public/ so you can visit http://localhost:5000/profile.html
 
 // 2) Connect to MongoDB
 mongoose
@@ -95,7 +94,7 @@ app.get("/raised-amount", async (req, res) => {
 });
 
 // GET /user/:walletAddress
-// If user not found, create them w/ random code
+// If user not found, create them
 app.get("/user/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
@@ -110,7 +109,7 @@ app.get("/user/:walletAddress", async (req, res) => {
       await user.save();
     }
 
-    const defaultAvatar = "/images/avatarmain.png"; // fallback
+    const defaultAvatar = "/images/avatarmain.png";
     res.json({
       walletAddress: user.walletAddress,
       referralCode: user.referralCode || null,
@@ -124,19 +123,16 @@ app.get("/user/:walletAddress", async (req, res) => {
   }
 });
 
-// NEW: POST /update-profile
-// Expects { walletAddress, displayName } in the body
+// POST /update-profile
 app.post("/update-profile", async (req, res) => {
   try {
     const { walletAddress, displayName } = req.body;
     if (!walletAddress) {
       return res.status(400).json({ error: "Missing walletAddress" });
     }
-
     // fetch or create user
     let user = await User.findOne({ walletAddress });
     if (!user) {
-      // if no user, create one (like in GET /user/:walletAddress)
       const randomCode = "REF" + Math.floor(Math.random() * 100000);
       user = new User({
         walletAddress,
@@ -144,12 +140,10 @@ app.post("/update-profile", async (req, res) => {
         referralEarnings: 0,
       });
     }
-
     if (displayName !== undefined) {
       user.displayName = displayName.trim();
     }
     await user.save();
-
     res.json({ message: "Profile updated" });
   } catch (err) {
     console.error("Error in /update-profile:", err);
@@ -161,12 +155,11 @@ app.post("/update-profile", async (req, res) => {
 app.post("/purchase", async (req, res) => {
   const { walletAddress, usdSpent, tokensReceived, transactionId, referralCode } = req.body;
 
-  // Basic checks
   if (!walletAddress || !usdSpent || !tokensReceived || !transactionId) {
     return res.status(400).json({ error: "Missing data" });
   }
 
-  // Validate transaction on Solana
+  // Validate on-chain (optional)
   try {
     const isValid = await validateSignatureOnChain(transactionId, walletAddress, usdSpent);
     if (!isValid) {
@@ -177,7 +170,7 @@ app.post("/purchase", async (req, res) => {
     return res.status(400).json({ error: "Unable to validate transaction." });
   }
 
-  // Prevent duplicates
+  // check duplicates
   const existingTx = await Purchase.findOne({ transactionId });
   if (existingTx) {
     return res.status(400).json({ error: "Duplicate transaction detected" });
@@ -193,7 +186,7 @@ app.post("/purchase", async (req, res) => {
   });
   await newPurchase.save();
 
-  // If referral code => 5% bonus
+  // If referral code => add 5% to refUser
   if (referralCode) {
     const refUser = await User.findOne({ referralCode });
     if (refUser) {
@@ -203,7 +196,6 @@ app.post("/purchase", async (req, res) => {
       console.log(`✅ Awarded $${bonus} to referrer with code ${referralCode}`);
     }
   }
-
   res.json({ message: "✅ Purchase recorded successfully" });
 });
 
@@ -249,7 +241,7 @@ app.post("/upload-avatar", (req, res) => {
       if (!req.file || !walletAddress) {
         return res.status(400).json({ error: "Missing wallet address or image." });
       }
-      const finalUrl = req.file.path; // Cloudinary returns the URL in req.file.path
+      const finalUrl = req.file.path; // Cloudinary URL
 
       // Update user doc
       const user = await User.findOne({ walletAddress });

@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 
-// For on-chain validation
+// For on-chain validation (Solana)
 const { Connection, PublicKey } = require("@solana/web3.js");
 
 // For Cloudinary integration
@@ -12,7 +12,6 @@ const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
-// 1) Create a connection to Solana
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const solanaConnection = new Connection(SOLANA_RPC_URL, "confirmed");
 
@@ -23,67 +22,68 @@ app.use(express.json());
 app.use(bodyParser.json());
 app.use(cors());
 
-// Serve the images folder (so /images/avatarmain.png is accessible)
-app.use("/images", express.static("images"));
+// 1) Serve images and static files
+app.use("/images", express.static("images")); 
+// Place your avatarmain.png in /images folder at the same level as server.js
+
+app.use(express.static("public")); 
+// We’ll put leaderboard.html in a `public/` folder so you can visit
+// http://localhost:5000/leaderboard.html
 
 // 2) Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log("✅ Connected to MongoDB"))
-.catch(err => console.error("❌ MongoDB Connection Error:", err));
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ Connected to MongoDB"))
+  .catch(err => console.error("❌ MongoDB Connection Error:", err));
 
 // 3) Models
-//    A) Purchase
 const purchaseSchema = new mongoose.Schema({
   walletAddress: String,
   usdSpent: Number,
   tokensReceived: Number,
   transactionId: String,
-  referralCodeUsed: String, // store which code was used
+  referralCodeUsed: String,
   timestamp: { type: Date, default: Date.now },
 });
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 
-//    B) User
-const User = require('./models/user'); // Must match your user.js model
+const User = require("./models/user");
 
-// ------------------------------------------------------
-// Cloudinary Configuration & Multer Storage for Avatars
-// ------------------------------------------------------
+// 4) Cloudinary & Multer config
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME, // from your .env
-  api_key: process.env.CLOUDINARY_API_KEY,       // from your .env
-  api_secret: process.env.CLOUDINARY_API_SECRET  // from your .env
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
-    folder: "avatars", // Folder in Cloudinary
-    allowed_formats: ["jpg", "png", "jpeg", "gif"],
+    folder: "avatars",
+    allowed_formats: ["jpg", "jpeg", "png", "gif"],
   },
 });
 
-// 500 KB limit; only image files allowed
-const upload = multer({ 
+// Limit: 500 KB, only images
+const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 }, // 500 KB
+  limits: { fileSize: 500 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith("image/")) {
       cb(new Error("Only image files are allowed!"), false);
     } else {
       cb(null, true);
     }
-  }
+  },
 });
 
-// 4) GET /raised-amount
+// 5) Routes
+
+// GET /raised-amount
 app.get("/raised-amount", async (req, res) => {
   try {
     const totalRaised = await Purchase.aggregate([
-      { $group: { _id: null, totalUSD: { $sum: "$usdSpent" } } }
+      { $group: { _id: null, totalUSD: { $sum: "$usdSpent" } } },
     ]);
     const sum = totalRaised.length > 0 ? totalRaised[0].totalUSD : 0;
     res.json({ totalUSD: sum });
@@ -93,32 +93,28 @@ app.get("/raised-amount", async (req, res) => {
   }
 });
 
-// 5) GET /user/:walletAddress
-//    - Return the user's referral info (code, earnings, avatar).
-//    - If user doesn't exist, auto-create them with a random code.
+// GET /user/:walletAddress
+// If user not found, create them w/ random code
 app.get("/user/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
     let user = await User.findOne({ walletAddress });
     if (!user) {
-      // Optionally generate a random code or custom logic
       const randomCode = "REF" + Math.floor(Math.random() * 100000);
       user = new User({
         walletAddress,
         referralCode: randomCode,
-        referralEarnings: 0
+        referralEarnings: 0,
       });
       await user.save();
     }
 
-    // Provide a fallback avatar if user.avatarUrl not set
-    const defaultAvatar = "/images/avatarmain.png";
-
-    return res.json({
+    const defaultAvatar = "/images/avatarmain.png"; // fallback
+    res.json({
       walletAddress: user.walletAddress,
       referralCode: user.referralCode || null,
       referralEarnings: user.referralEarnings || 0,
-      avatarUrl: user.avatarUrl || defaultAvatar
+      avatarUrl: user.avatarUrl || defaultAvatar,
     });
   } catch (err) {
     console.error("Error in GET /user:", err);
@@ -126,11 +122,7 @@ app.get("/user/:walletAddress", async (req, res) => {
   }
 });
 
-// 6) POST /purchase
-//    - Validate on-chain
-//    - Check for duplicates
-//    - Save purchase
-//    - If referralCode => find the user & add 5% of usdSpent to referralEarnings
+// POST /purchase
 app.post("/purchase", async (req, res) => {
   const { walletAddress, usdSpent, tokensReceived, transactionId, referralCode } = req.body;
 
@@ -139,7 +131,7 @@ app.post("/purchase", async (req, res) => {
     return res.status(400).json({ error: "Missing data" });
   }
 
-  // Validate transaction
+  // Validate transaction on Solana
   try {
     const isValid = await validateSignatureOnChain(transactionId, walletAddress, usdSpent);
     if (!isValid) {
@@ -162,11 +154,11 @@ app.post("/purchase", async (req, res) => {
     usdSpent,
     tokensReceived,
     transactionId,
-    referralCodeUsed: referralCode || null
+    referralCodeUsed: referralCode || null,
   });
   await newPurchase.save();
 
-  // If there's a referralCode => 5% bonus
+  // If referral code => 5% bonus
   if (referralCode) {
     const refUser = await User.findOne({ referralCode });
     if (refUser) {
@@ -180,8 +172,7 @@ app.post("/purchase", async (req, res) => {
   res.json({ message: "✅ Purchase recorded successfully" });
 });
 
-// 7) GET /user-purchases/:walletAddress
-//    - Return total user invested & tokens
+// GET /user-purchases/:walletAddress
 app.get("/user-purchases/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
@@ -196,8 +187,7 @@ app.get("/user-purchases/:walletAddress", async (req, res) => {
   }
 });
 
-// 8) GET /leaderboard
-//    - Return the top 1000 users sorted by referralEarnings desc
+// GET /leaderboard => top 1000 sorted by referralEarnings desc
 app.get("/leaderboard", async (req, res) => {
   try {
     const topUsers = await User.find().sort({ referralEarnings: -1 }).limit(1000);
@@ -208,13 +198,14 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// 9) POST /upload-avatar using Cloudinary
-//    - Restrict file size to 500 KB
+// POST /upload-avatar => Cloudinary
 app.post("/upload-avatar", (req, res) => {
-  upload.single("avatar")(req, res, async function(err) {
+  upload.single("avatar")(req, res, async function (err) {
     if (err) {
       if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({ error: "File size too large. Please resize your image to under 500KB." });
+        return res
+          .status(400)
+          .json({ error: "File size too large. Please resize your image to under 500KB." });
       }
       return res.status(400).json({ error: err.message });
     }
@@ -223,26 +214,26 @@ app.post("/upload-avatar", (req, res) => {
       if (!req.file || !walletAddress) {
         return res.status(400).json({ error: "Missing wallet address or image." });
       }
-      // Cloudinary returns the URL in req.file.path
-      const finalUrl = req.file.path;
+      const finalUrl = req.file.path; // Cloudinary returns the URL in req.file.path
 
       // Update user doc
       const user = await User.findOne({ walletAddress });
-      if (!user) return res.status(404).json({ error: "User not found" });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
 
-      // Overwrite or set the new avatar
       user.avatarUrl = finalUrl;
       await user.save();
 
       res.json({ message: "Avatar uploaded successfully", avatarUrl: finalUrl });
-    } catch (err) {
-      console.error("Avatar upload error:", err);
+    } catch (error) {
+      console.error("Avatar upload error:", error);
       res.status(500).json({ error: "Avatar upload failed" });
     }
   });
 });
 
-// 10) Webhook from Helius (optional)
+// Example webhook from Helius (optional)
 app.post("/webhook/solana-inbound", async (req, res) => {
   console.log("🔔 Webhook received from Helius!");
   try {
@@ -260,14 +251,13 @@ app.post("/webhook/solana-inbound", async (req, res) => {
             const usdSpent = parseFloat(amount) / 1e6;
             const tokensReceived = usdSpent / 0.00851;
 
-            // duplicates check
             const existingTx = await Purchase.findOne({ transactionId });
             if (!existingTx) {
               const newPurchase = new Purchase({
                 walletAddress,
                 usdSpent,
                 tokensReceived,
-                transactionId
+                transactionId,
               });
               await newPurchase.save();
               console.log(`✅ Helius: Saved Purchase from ${walletAddress}: $${usdSpent}`);
@@ -285,16 +275,16 @@ app.post("/webhook/solana-inbound", async (req, res) => {
   }
 });
 
-// 11) Start the server
+// Start the server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// 12) Validate signature on Solana
+// Validate signature on Solana
 async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpent) {
   try {
     const txInfo = await solanaConnection.getTransaction(txSignature, {
-      commitment: "confirmed"
+      commitment: "confirmed",
     });
     if (!txInfo) {
       console.log("No transaction found for signature:", txSignature);
@@ -311,8 +301,9 @@ async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpen
       return false;
     }
 
-    // Check presale wallet is present
-    const presaleWalletKey = process.env.PRESALE_WALLET || "4qdqnmNxUTjKTJMhVztPxtgwVuU7p2aoJMCJVFEQ6Wzw";
+    // Check presale wallet
+    const presaleWalletKey =
+      process.env.PRESALE_WALLET || "4qdqnmNxUTjKTJMhVztPxtgwVuU7p2aoJMCJVFEQ6Wzw";
     const presaleWallet = new PublicKey(presaleWalletKey);
     const hasPresaleWallet = accountKeys.find(k => k.equals(presaleWallet));
     if (!hasPresaleWallet) {
@@ -320,7 +311,7 @@ async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpen
       return false;
     }
 
-    // Additional checks if you want to parse amounts precisely
+    // Additional checks (parse amounts, etc.) if you want
     return true;
   } catch (err) {
     console.error("Error in validateSignatureOnChain:", err);

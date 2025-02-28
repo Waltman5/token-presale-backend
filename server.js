@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 
-// For on-chain validation (Solana)
+// For on-chain validation (Solana) [optional]
 const { Connection, PublicKey } = require("@solana/web3.js");
 
 // For Cloudinary integration
@@ -12,23 +12,24 @@ const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
-const SOLANA_RPC_URL =
-  process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+// If using Solana validation:
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const solanaConnection = new Connection(SOLANA_RPC_URL, "confirmed");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Basic Express config
 app.use(express.json());
 app.use(bodyParser.json());
 app.use(cors());
 
 // 1) Serve images and static files
 app.use("/images", express.static("images")); 
-// Place avatarmain.png inside a local 'images' folder
+// Place "avatarmain.png" in a local "images" folder at the same level as server.js
 
 app.use(express.static("public"));
-// We'll put .html files in public/ so you can visit http://localhost:5000/profile.html
+// So you can serve e.g. "profile.html" from /public, visited at http://localhost:5000/profile.html
 
 // 2) Connect to MongoDB
 mongoose
@@ -37,6 +38,7 @@ mongoose
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 // 3) Models
+// Purchase schema
 const purchaseSchema = new mongoose.Schema({
   walletAddress: String,
   usdSpent: Number,
@@ -47,6 +49,7 @@ const purchaseSchema = new mongoose.Schema({
 });
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 
+// User schema (displayName, avatarUrl, etc.)
 const User = require("./models/user");
 
 // 4) Cloudinary & Multer config
@@ -56,6 +59,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Store images in Cloudinary under "avatars/"
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -64,7 +68,7 @@ const storage = new CloudinaryStorage({
   },
 });
 
-// Limit: 500 KB, only images
+// Multer settings: limit to 500 KB, images only
 const upload = multer({
   storage,
   limits: { fileSize: 500 * 1024 },
@@ -79,7 +83,7 @@ const upload = multer({
 
 // 5) Routes
 
-// GET /raised-amount
+// ============== GET /raised-amount ==============
 app.get("/raised-amount", async (req, res) => {
   try {
     const totalRaised = await Purchase.aggregate([
@@ -93,8 +97,8 @@ app.get("/raised-amount", async (req, res) => {
   }
 });
 
-// GET /user/:walletAddress
-// If user not found, create them
+// ============== GET /user/:walletAddress ==============
+// If no user doc, create one with a random referralCode
 app.get("/user/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
@@ -109,7 +113,7 @@ app.get("/user/:walletAddress", async (req, res) => {
       await user.save();
     }
 
-    const defaultAvatar = "/images/avatarmain.png";
+    const defaultAvatar = "/images/avatarmain.png"; // fallback if user has no avatar
     res.json({
       walletAddress: user.walletAddress,
       referralCode: user.referralCode || null,
@@ -123,13 +127,15 @@ app.get("/user/:walletAddress", async (req, res) => {
   }
 });
 
-// POST /update-profile
+// ============== POST /update-profile ==============
+// Receives { walletAddress, displayName } to update or create user doc
 app.post("/update-profile", async (req, res) => {
   try {
     const { walletAddress, displayName } = req.body;
     if (!walletAddress) {
       return res.status(400).json({ error: "Missing walletAddress" });
     }
+
     // fetch or create user
     let user = await User.findOne({ walletAddress });
     if (!user) {
@@ -140,7 +146,7 @@ app.post("/update-profile", async (req, res) => {
         referralEarnings: 0,
       });
     }
-    if (displayName !== undefined) {
+    if (typeof displayName === "string") {
       user.displayName = displayName.trim();
     }
     await user.save();
@@ -151,15 +157,17 @@ app.post("/update-profile", async (req, res) => {
   }
 });
 
-// POST /purchase
+// ============== POST /purchase ==============
+// Used to record new purchases
 app.post("/purchase", async (req, res) => {
   const { walletAddress, usdSpent, tokensReceived, transactionId, referralCode } = req.body;
 
+  // Basic input checks
   if (!walletAddress || !usdSpent || !tokensReceived || !transactionId) {
     return res.status(400).json({ error: "Missing data" });
   }
 
-  // Validate on-chain (optional)
+  // (Optional) Validate transaction on Solana
   try {
     const isValid = await validateSignatureOnChain(transactionId, walletAddress, usdSpent);
     if (!isValid) {
@@ -170,7 +178,7 @@ app.post("/purchase", async (req, res) => {
     return res.status(400).json({ error: "Unable to validate transaction." });
   }
 
-  // check duplicates
+  // Prevent duplicate transactions
   const existingTx = await Purchase.findOne({ transactionId });
   if (existingTx) {
     return res.status(400).json({ error: "Duplicate transaction detected" });
@@ -186,7 +194,7 @@ app.post("/purchase", async (req, res) => {
   });
   await newPurchase.save();
 
-  // If referral code => add 5% to refUser
+  // If referral code => add 5% to referrer's referralEarnings
   if (referralCode) {
     const refUser = await User.findOne({ referralCode });
     if (refUser) {
@@ -199,7 +207,8 @@ app.post("/purchase", async (req, res) => {
   res.json({ message: "✅ Purchase recorded successfully" });
 });
 
-// GET /user-purchases/:walletAddress
+// ============== GET /user-purchases/:walletAddress ==============
+// Return total USD spent and total tokens purchased by user
 app.get("/user-purchases/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
@@ -214,7 +223,8 @@ app.get("/user-purchases/:walletAddress", async (req, res) => {
   }
 });
 
-// GET /leaderboard => top 1000 sorted by referralEarnings desc
+// ============== GET /leaderboard ==============
+// Return top 1000 users sorted by referralEarnings desc
 app.get("/leaderboard", async (req, res) => {
   try {
     const topUsers = await User.find().sort({ referralEarnings: -1 }).limit(1000);
@@ -225,10 +235,13 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// POST /upload-avatar => Cloudinary
+// ============== POST /upload-avatar ==============
+// Accepts { walletAddress, avatar } to store an image in Cloudinary
 app.post("/upload-avatar", (req, res) => {
+  // We wrap upload.single(...) to handle Multer + Cloudinary
   upload.single("avatar")(req, res, async function (err) {
     if (err) {
+      // If file is too big
       if (err.code === "LIMIT_FILE_SIZE") {
         return res
           .status(400)
@@ -241,9 +254,9 @@ app.post("/upload-avatar", (req, res) => {
       if (!req.file || !walletAddress) {
         return res.status(400).json({ error: "Missing wallet address or image." });
       }
-      const finalUrl = req.file.path; // Cloudinary URL
+      const finalUrl = req.file.path; // The Cloudinary URL
 
-      // Update user doc
+      // Update user's avatar
       const user = await User.findOne({ walletAddress });
       if (!user) {
         return res.status(404).json({ error: "User not found" });
@@ -278,6 +291,7 @@ app.post("/webhook/solana-inbound", async (req, res) => {
             const usdSpent = parseFloat(amount) / 1e6;
             const tokensReceived = usdSpent / 0.00851;
 
+            // Check for duplicates
             const existingTx = await Purchase.findOne({ transactionId });
             if (!existingTx) {
               const newPurchase = new Purchase({
@@ -307,7 +321,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Validate signature on Solana
+// (Optional) Validate signature on Solana
 async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpent) {
   try {
     const txInfo = await solanaConnection.getTransaction(txSignature, {
@@ -322,7 +336,7 @@ async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpen
     const { transaction } = txInfo;
     const accountKeys = transaction.message.accountKeys;
 
-    // Check signer
+    // Check the first signer
     if (!accountKeys[0].equals(fromPubKey)) {
       console.log("Signature signer does not match fromWallet:", fromWallet);
       return false;
@@ -338,7 +352,7 @@ async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpen
       return false;
     }
 
-    // Additional checks (parse amounts, etc.) if you want
+    // Additional checks (like amounts) if you want
     return true;
   } catch (err) {
     console.error("Error in validateSignatureOnChain:", err);

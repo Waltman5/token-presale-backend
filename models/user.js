@@ -22,7 +22,9 @@ const userSchema = new mongoose.Schema({
   referralEarnings: {
     type: Number,
     default: 0
-  }
+  },
+   displayName: { type: String, required: false, default: "" },
+  avatarUrl: { type: String, required: false, default: "" }
 });
 
 module.exports = mongoose.model("User", userSchema);

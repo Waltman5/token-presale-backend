@@ -12,7 +12,8 @@ const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const SOLANA_RPC_URL =
+  process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const solanaConnection = new Connection(SOLANA_RPC_URL, "confirmed");
 
 const app = express();
@@ -26,15 +27,15 @@ app.use(cors());
 app.use("/images", express.static("images")); 
 // Place your avatarmain.png in /images folder at the same level as server.js
 
-app.use(express.static("public")); 
-// We’ll put leaderboard.html in a `public/` folder so you can visit
+app.use(express.static("public"));
+// We'll put leaderboard.html in a `public/` folder so you can visit
 // http://localhost:5000/leaderboard.html
 
 // 2) Connect to MongoDB
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Connected to MongoDB"))
-  .catch(err => console.error("❌ MongoDB Connection Error:", err));
+  .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 // 3) Models
 const purchaseSchema = new mongoose.Schema({
@@ -115,10 +116,44 @@ app.get("/user/:walletAddress", async (req, res) => {
       referralCode: user.referralCode || null,
       referralEarnings: user.referralEarnings || 0,
       avatarUrl: user.avatarUrl || defaultAvatar,
+      displayName: user.displayName || "",
     });
   } catch (err) {
     console.error("Error in GET /user:", err);
     res.status(500).json({ error: "Failed to get user info" });
+  }
+});
+
+// NEW: POST /update-profile
+// Expects { walletAddress, displayName } in the body
+app.post("/update-profile", async (req, res) => {
+  try {
+    const { walletAddress, displayName } = req.body;
+    if (!walletAddress) {
+      return res.status(400).json({ error: "Missing walletAddress" });
+    }
+
+    // fetch or create user
+    let user = await User.findOne({ walletAddress });
+    if (!user) {
+      // if no user, create one (like in GET /user/:walletAddress)
+      const randomCode = "REF" + Math.floor(Math.random() * 100000);
+      user = new User({
+        walletAddress,
+        referralCode: randomCode,
+        referralEarnings: 0,
+      });
+    }
+
+    if (displayName !== undefined) {
+      user.displayName = displayName.trim();
+    }
+    await user.save();
+
+    res.json({ message: "Profile updated" });
+  } catch (err) {
+    console.error("Error in /update-profile:", err);
+    res.status(500).json({ error: "Failed to update profile" });
   }
 });
 
@@ -305,7 +340,7 @@ async function validateSignatureOnChain(txSignature, fromWallet, expectedUsdSpen
     const presaleWalletKey =
       process.env.PRESALE_WALLET || "4qdqnmNxUTjKTJMhVztPxtgwVuU7p2aoJMCJVFEQ6Wzw";
     const presaleWallet = new PublicKey(presaleWalletKey);
-    const hasPresaleWallet = accountKeys.find(k => k.equals(presaleWallet));
+    const hasPresaleWallet = accountKeys.find((k) => k.equals(presaleWallet));
     if (!hasPresaleWallet) {
       console.log("Presale wallet not found in tx's account keys");
       return false;
